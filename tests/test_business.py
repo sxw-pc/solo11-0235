@@ -46,6 +46,11 @@ class BusinessTests(unittest.TestCase):
         self.job('child',deadline=200,parents=['j'])
         self.job('grandchild',deadline=150,parents=['child'])
         self.assertEqual(self.run_action('job.revise',id='j',deadline=170,expected=1),'blocked_successors')
+    def test_invalid_resources_and_windows_do_not_create_leases(self):
+        self.assertEqual(self.job(cpu=-1),'invalid_resource')
+        self.assertEqual(self.run_action('slot.register',id='invalid',node='n',cpu=4,memory=-1,at=1),'invalid_resource')
+        self.job();self.slot()
+        self.assertEqual(self.run_action('slot.lease',id='j',slot='s',at=20,expires=10),'invalid_window')
     def test_attempt_delivery_and_retention(self):
         self.job();self.slot();self.lease()
         self.assertEqual(self.run_action('run.start',id='j',generation=1,at=3),'running')

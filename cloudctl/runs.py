@@ -38,6 +38,8 @@ def finalize(db,jid,generation,at):
     attempt=row(db,'SELECT * FROM attempts WHERE job=? AND generation=?',(jid,generation))
     if not job or not attempt or attempt['status']!='success':
         return record(db,'finalize',jid,'no_successful_attempt',{})
+    if job['status'] not in ('accepted','delivered'):
+        return record(db,'finalize',jid,'job_not_active',{'status':job['status']})
     if job['status']=='delivered':return record(db,'finalize',jid,'idempotent',{})
     parents=rows(db,'SELECT parent FROM dependencies WHERE job=?',(jid,))
     unmet=[p['parent'] for p in parents if not row(db,'SELECT job FROM artifacts WHERE job=? AND status=?',(p['parent'],'delivered'))]

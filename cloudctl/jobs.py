@@ -2,6 +2,8 @@ from .store import row,rows,record
 
 def submit(db,request):
     jid=request['id']; parents=sorted(set(request.get('parents',[])))
+    if min(request['cpu'],request.get('memory',1),request['duration'])<=0:
+        return record(db,'submit',jid,'invalid_resource',{})
     old=row(db,'SELECT * FROM jobs WHERE id=?',(jid,))
     if old:
         return record(db,'submit',jid,'idempotent' if old['deadline']==request['deadline'] else 'conflict',{'old_version':old['version']})
@@ -17,6 +19,7 @@ def submit(db,request):
 def revise(db,jid,deadline,expected):
     job=row(db,'SELECT * FROM jobs WHERE id=?',(jid,))
     if not job:return record(db,'revise',jid,'missing',{})
+    if job['status']!='accepted':return record(db,'revise',jid,'not_revisable',{'status':job['status']})
     if job['version']!=expected:return record(db,'revise',jid,'stale_version',{'current':job['version']})
     if row(db,'SELECT job FROM attempts WHERE job=?',(jid,)):
         return record(db,'revise',jid,'already_started',{})
