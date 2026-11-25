@@ -64,5 +64,16 @@ class BusinessTests(unittest.TestCase):
         with store.transaction(self.db) as db:
             self.assertEqual(store.row(db,'SELECT status FROM jobs WHERE id=?',('child',))['status'],'blocked_parent')
             self.assertEqual(store.row(db,'SELECT status FROM leases WHERE job=?',('j',))['status'],'released')
+    def test_parent_artifact_changes_child_delivery_decision(self):
+        digest='sha256:'+hashlib.sha256(b'payload').hexdigest()
+        self.job();self.job('child',parents=['j']);self.slot();self.lease('child')
+        self.run_action('run.start',id='child',generation=1,at=3)
+        self.assertEqual(self.run_action('run.settle',id='child',generation=1,at=20,digest=digest,content='payload'),'delivery_blocked')
+        self.assertEqual(self.run_action('run.finalize',id='child',generation=1,at=21),'waiting_parents')
+        self.run_action('slot.register',id='parent-slot',node='n2',cpu=4,at=2)
+        self.run_action('slot.lease',id='j',slot='parent-slot',at=3,expires=50)
+        self.run_action('run.start',id='j',generation=1,at=4)
+        self.assertEqual(self.run_action('run.settle',id='j',generation=1,at=15,digest=digest,content='payload'),'delivered')
+        self.assertEqual(self.run_action('run.finalize',id='child',generation=1,at=22),'delivered')
 
 if __name__=='__main__':unittest.main()

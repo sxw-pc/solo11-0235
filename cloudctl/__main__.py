@@ -13,6 +13,7 @@ OPERATIONS={
     'slot.repay':lambda db,r:slots.repay(db,r['id'],r['slot'],r['at']),
     'run.start':lambda db,r:runs.start(db,r['id'],r['generation'],r['at']),
     'run.settle':lambda db,r:runs.settle(db,r['id'],r['generation'],r['at'],r.get('digest'),r.get('success',True),r.get('content')),
+    'run.finalize':lambda db,r:runs.finalize(db,r['id'],r['generation'],r['at']),
     'run.retention':lambda db,r:runs.retention(db,r['id'],r['expires'],r['hold'],r.get('reason','')),
     'run.purge':lambda db,r:runs.purge(db,r['at']),
 }
