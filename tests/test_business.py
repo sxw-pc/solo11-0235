@@ -75,5 +75,6 @@ class BusinessTests(unittest.TestCase):
         self.run_action('run.start',id='j',generation=1,at=4)
         self.assertEqual(self.run_action('run.settle',id='j',generation=1,at=15,digest=digest,content='payload'),'delivered')
         self.assertEqual(self.run_action('run.finalize',id='child',generation=1,at=22),'delivered')
+        self.assertEqual(self.run_action('job.audit',id='child'),'delivered')
 
 if __name__=='__main__':unittest.main()

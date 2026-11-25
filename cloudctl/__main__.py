@@ -1,7 +1,7 @@
 import argparse
 import json
 import sys
-from . import jobs,slots,runs,store
+from . import jobs,slots,runs,store,audit
 
 OPERATIONS={
     'job.submit':jobs.submit,
@@ -16,6 +16,7 @@ OPERATIONS={
     'run.finalize':lambda db,r:runs.finalize(db,r['id'],r['generation'],r['at']),
     'run.retention':lambda db,r:runs.retention(db,r['id'],r['expires'],r['hold'],r.get('reason','')),
     'run.purge':lambda db,r:runs.purge(db,r['at']),
+    'job.audit':lambda db,r:audit.inspect(db,r['id']),
 }
 
 def execute(db_path,request):
@@ -43,6 +44,8 @@ def main():
     for request in requests:
         if args.command not in ('demo',request['action'].split('.')[0]):
             raise ValueError('fixture action and command differ')
+        for prerequisite in request.get('setup',[]):
+            execute(args.db,prerequisite)
         print(json.dumps(execute(args.db,request),ensure_ascii=False))
 
 if __name__=='__main__':
