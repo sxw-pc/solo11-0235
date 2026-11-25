@@ -1,3 +1,4 @@
+import hashlib
 from .store import row,rows,record
 
 def start(db,jid,generation,at):
@@ -9,12 +10,14 @@ def start(db,jid,generation,at):
     db.execute('INSERT INTO attempts(job,generation,status,started) VALUES(?,?,?,?)',(jid,generation,'running',at))
     return record(db,'start',jid,'running',{'generation':generation})
 
-def settle(db,jid,generation,at,digest,success=True):
+def settle(db,jid,generation,at,digest,success=True,content=None):
     job=row(db,'SELECT * FROM jobs WHERE id=?',(jid,)); attempt=row(db,'SELECT * FROM attempts WHERE job=? AND generation=?',(jid,generation))
     lease=row(db,'SELECT * FROM leases WHERE job=?',(jid,))
     if not attempt or not lease or lease['generation']!=generation or lease['status']!='active':
         return record(db,'settle',jid,'stale_attempt',{'generation':generation})
     if attempt['status']!='running':return record(db,'settle',jid,'idempotent',{})
+    if success and (content is None or digest != 'sha256:'+hashlib.sha256(content.encode()).hexdigest()):
+        return record(db,'settle',jid,'digest_mismatch',{'generation':generation})
     db.execute('UPDATE attempts SET status=?,ended=?,digest=? WHERE job=? AND generation=?',('success' if success else 'failed',at,digest,jid,generation))
     if not success:
         decision='retryable' if at+job['duration']<job['deadline'] else 'breached'

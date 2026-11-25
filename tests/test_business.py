@@ -1,5 +1,6 @@
 import tempfile
 import unittest
+import hashlib
 from pathlib import Path
 from cloudctl import store
 from cloudctl.__main__ import execute
@@ -34,7 +35,8 @@ class BusinessTests(unittest.TestCase):
     def test_attempt_delivery_and_retention(self):
         self.job();self.slot();self.lease()
         self.assertEqual(self.run_action('run.start',id='j',generation=1,at=3),'running')
-        self.assertEqual(self.run_action('run.settle',id='j',generation=1,at=20,digest='hash'),'delivered')
+        digest='sha256:'+hashlib.sha256(b'payload').hexdigest()
+        self.assertEqual(self.run_action('run.settle',id='j',generation=1,at=20,digest=digest,content='payload'),'delivered')
         self.assertEqual(self.run_action('run.retention',id='j',expires=30,hold=True,reason='audit'),'held')
         self.assertEqual(self.run_action('run.purge',at=40),'purged')
         with store.transaction(self.db) as db:
@@ -45,5 +47,16 @@ class BusinessTests(unittest.TestCase):
         self.assertEqual(self.run_action('run.settle',id='j',generation=1,at=20,success=False),'retryable')
         self.assertEqual(self.run_action('job.cancel',id='j',at=21,reason='operator'),'cancelled')
         self.assertEqual(self.run_action('run.settle',id='j',generation=1,at=22,digest='late'),'stale_attempt')
+    def test_digest_mismatch_preserves_running_attempt(self):
+        self.job();self.slot();self.lease();self.run_action('run.start',id='j',generation=1,at=3)
+        self.assertEqual(self.run_action('run.settle',id='j',generation=1,at=20,digest='bad',content='payload'),'digest_mismatch')
+        with store.transaction(self.db) as db:
+            self.assertEqual(store.row(db,'SELECT status FROM attempts WHERE job=?',('j',))['status'],'running')
+    def test_cancel_blocks_successors_and_releases_slot(self):
+        self.job();self.job('child',parents=['j']);self.slot();self.lease()
+        self.assertEqual(self.run_action('job.cancel',id='j',at=3,reason='operator'),'cancelled')
+        with store.transaction(self.db) as db:
+            self.assertEqual(store.row(db,'SELECT status FROM jobs WHERE id=?',('child',))['status'],'blocked_parent')
+            self.assertEqual(store.row(db,'SELECT status FROM leases WHERE job=?',('j',))['status'],'released')
 
 if __name__=='__main__':unittest.main()
