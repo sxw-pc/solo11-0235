@@ -10,6 +10,7 @@ OPERATIONS={
     'slot.register':slots.register,
     'slot.lease':lambda db,r:slots.lease(db,r['id'],r['slot'],r['at'],r['expires'],r.get('preempt',False)),
     'slot.heartbeat':lambda db,r:slots.heartbeat(db,r['slot'],r['at'],r['healthy']),
+    'slot.repay':lambda db,r:slots.repay(db,r['id'],r['slot'],r['at']),
     'run.start':lambda db,r:runs.start(db,r['id'],r['generation'],r['at']),
     'run.settle':lambda db,r:runs.settle(db,r['id'],r['generation'],r['at'],r.get('digest'),r.get('success',True),r.get('content')),
     'run.retention':lambda db,r:runs.retention(db,r['id'],r['expires'],r['hold'],r.get('reason','')),
