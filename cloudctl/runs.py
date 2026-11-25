@@ -5,6 +5,13 @@ def start(db,jid,generation,at):
     job=row(db,'SELECT * FROM jobs WHERE id=?',(jid,)); lease=row(db,'SELECT * FROM leases WHERE job=?',(jid,))
     if not job or job['status']!='accepted' or not lease or lease['status']!='active' or lease['generation']!=generation:
         return record(db,'start',jid,'not_leased',{'generation':generation})
+    if at>lease['expires']:
+        db.execute('UPDATE leases SET status=? WHERE job=?',('expired',jid))
+        return record(db,'start',jid,'lease_expired',{'expires':lease['expires'],'at':at})
+    slot=row(db,'SELECT * FROM slots WHERE id=?',(lease['slot'],))
+    if not slot or not slot['healthy'] or at-slot['heartbeat']>60:
+        db.execute('UPDATE leases SET status=? WHERE job=?',('isolated',jid))
+        return record(db,'start',jid,'slot_unavailable',{'slot':lease['slot'],'at':at})
     existing=row(db,'SELECT * FROM attempts WHERE job=? AND generation=?',(jid,generation))
     if existing:return record(db,'start',jid,'idempotent',{})
     db.execute('INSERT INTO attempts(job,generation,status,started) VALUES(?,?,?,?)',(jid,generation,'running',at))
@@ -16,6 +23,15 @@ def settle(db,jid,generation,at,digest,success=True,content=None):
     if not attempt or not lease or lease['generation']!=generation or lease['status']!='active':
         return record(db,'settle',jid,'stale_attempt',{'generation':generation})
     if attempt['status']!='running':return record(db,'settle',jid,'idempotent',{})
+    if at>lease['expires']:
+        db.execute('UPDATE attempts SET status=?,ended=? WHERE job=? AND generation=?',('expired',at,jid,generation))
+        db.execute('UPDATE leases SET status=? WHERE job=?',('expired',jid))
+        return record(db,'settle',jid,'lease_expired',{'expires':lease['expires'],'at':at})
+    slot=row(db,'SELECT * FROM slots WHERE id=?',(lease['slot'],))
+    if not slot or not slot['healthy'] or at-slot['heartbeat']>60:
+        db.execute('UPDATE attempts SET status=?,ended=? WHERE job=? AND generation=?',('isolated',at,jid,generation))
+        db.execute('UPDATE leases SET status=? WHERE job=?',('isolated',jid))
+        return record(db,'settle',jid,'slot_unavailable',{'slot':lease['slot'],'at':at})
     if success and (content is None or digest != 'sha256:'+hashlib.sha256(content.encode()).hexdigest()):
         return record(db,'settle',jid,'digest_mismatch',{'generation':generation})
     db.execute('UPDATE attempts SET status=?,ended=?,digest=? WHERE job=? AND generation=?',('success' if success else 'failed',at,digest,jid,generation))
@@ -41,6 +57,16 @@ def finalize(db,jid,generation,at):
     if job['status'] not in ('accepted','delivered'):
         return record(db,'finalize',jid,'job_not_active',{'status':job['status']})
     if job['status']=='delivered':return record(db,'finalize',jid,'idempotent',{})
+    lease=row(db,'SELECT * FROM leases WHERE job=?',(jid,))
+    if not lease or lease['generation']!=generation or lease['status']!='active':
+        return record(db,'finalize',jid,'stale_attempt',{'generation':generation})
+    if at>lease['expires']:
+        db.execute('UPDATE leases SET status=? WHERE job=?',('expired',jid))
+        return record(db,'finalize',jid,'lease_expired',{'expires':lease['expires'],'at':at})
+    slot=row(db,'SELECT * FROM slots WHERE id=?',(lease['slot'],))
+    if not slot or not slot['healthy'] or at-slot['heartbeat']>60:
+        db.execute('UPDATE leases SET status=? WHERE job=?',('isolated',jid))
+        return record(db,'finalize',jid,'slot_unavailable',{'slot':lease['slot'],'at':at})
     parents=rows(db,'SELECT parent FROM dependencies WHERE job=?',(jid,))
     unmet=[p['parent'] for p in parents if not row(db,'SELECT job FROM artifacts WHERE job=? AND status=?',(p['parent'],'delivered'))]
     if unmet:return record(db,'finalize',jid,'waiting_parents',{'unmet':unmet})

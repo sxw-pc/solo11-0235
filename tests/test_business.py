@@ -71,6 +71,27 @@ class BusinessTests(unittest.TestCase):
         self.assertEqual(self.run_action('run.settle',id='j',generation=1,at=20,digest='bad',content='payload'),'digest_mismatch')
         with store.transaction(self.db) as db:
             self.assertEqual(store.row(db,'SELECT status FROM attempts WHERE job=?',('j',))['status'],'running')
+    def test_expired_lease_cannot_start_or_deliver(self):
+        digest='sha256:'+hashlib.sha256(b'payload').hexdigest()
+        self.job();self.slot()
+        self.assertEqual(self.run_action('slot.lease',id='j',slot='s',at=2,expires=5),'leased')
+        self.assertEqual(self.run_action('run.start',id='j',generation=1,at=6),'lease_expired')
+        with store.transaction(self.db) as db:self.assertIsNone(store.row(db,'SELECT * FROM attempts WHERE job=?',('j',)))
+        self.assertEqual(self.run_action('slot.lease',id='j',slot='s',at=7,expires=50),'leased')
+        self.assertEqual(self.run_action('run.start',id='j',generation=2,at=8),'running')
+        self.assertEqual(self.run_action('run.settle',id='j',generation=2,at=51,digest=digest,content='payload'),'lease_expired')
+        with store.transaction(self.db) as db:
+            self.assertIsNone(store.row(db,'SELECT * FROM artifacts WHERE job=?',('j',)))
+            self.assertEqual(store.row(db,'SELECT status FROM attempts WHERE job=? AND generation=?',('j',2))['status'],'expired')
+    def test_stale_slot_heartbeat_cannot_start_or_deliver(self):
+        self.job(deadline=200);self.slot()
+        self.assertEqual(self.run_action('slot.lease',id='j',slot='s',at=2,expires=150),'leased')
+        self.assertEqual(self.run_action('run.start',id='j',generation=1,at=63),'slot_unavailable')
+        self.assertEqual(self.run_action('slot.lease',id='j',slot='s',at=64,expires=150),'slot_unavailable')
+        self.assertEqual(self.run_action('slot.heartbeat',slot='s',at=65,healthy=True),'healthy')
+        self.assertEqual(self.run_action('slot.lease',id='j',slot='s',at=66,expires=150),'leased')
+        self.assertEqual(self.run_action('run.start',id='j',generation=2,at=67),'running')
+        self.assertEqual(self.run_action('run.settle',id='j',generation=2,at=127,digest='bad',content='payload'),'slot_unavailable')
     def test_cancel_blocks_successors_and_releases_slot(self):
         self.job();self.job('child',parents=['j']);self.job('grandchild',parents=['child']);self.slot();self.lease()
         self.assertEqual(self.run_action('job.cancel',id='j',at=3,reason='operator'),'cancelled')
