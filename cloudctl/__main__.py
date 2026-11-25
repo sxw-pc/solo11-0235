@@ -30,6 +30,7 @@ def execute(db_path,request):
 def main():
     parser=argparse.ArgumentParser()
     parser.add_argument('command',choices=['init','demo','job','slot','run'])
+    parser.add_argument('operation',nargs='?')
     parser.add_argument('--db',default='state.sqlite')
     parser.add_argument('--fixture')
     args=parser.parse_args()

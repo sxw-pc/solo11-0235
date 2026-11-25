@@ -1,0 +1,1 @@
+{"action":"slot.lease","id":"entry-job","slot":"entry-slot","at":2,"expires":50,"setup":[{"action":"job.submit","id":"entry-job","tenant":"t1","deadline":100,"duration":10,"cpu":2,"created":0},{"action":"slot.register","id":"entry-slot","node":"n1","cpu":4,"at":1}]}
