@@ -2,17 +2,17 @@ from .store import row,rows,record
 
 def register(db,request):
     old=row(db,'SELECT * FROM slots WHERE id=?',(request['id'],))
-    if old and old['cpu']!=request['cpu']:return record(db,'slot',request['id'],'conflict',{})
-    db.execute('INSERT OR REPLACE INTO slots VALUES(?,?,?,?,?)',(request['id'],request['cpu'],request['node'],1,request['at']))
-    return record(db,'slot',request['id'],'ready',{'cpu':request['cpu']})
+    if old and (old['cpu']!=request['cpu'] or old['memory']!=request.get('memory',4)):return record(db,'slot',request['id'],'conflict',{})
+    db.execute('INSERT OR REPLACE INTO slots VALUES(?,?,?,?,?,?)',(request['id'],request['cpu'],request.get('memory',4),request['node'],1,request['at']))
+    return record(db,'slot',request['id'],'ready',{'cpu':request['cpu'],'memory':request.get('memory',4)})
 
 def lease(db,jid,slot_id,now,expires,preempt=False):
     job=row(db,'SELECT * FROM jobs WHERE id=?',(jid,)); slot=row(db,'SELECT * FROM slots WHERE id=?',(slot_id,))
     if not job or job['status']!='accepted':return record(db,'lease',jid,'job_unavailable',{})
     if not slot or not slot['healthy'] or now-slot['heartbeat']>60:
         return record(db,'lease',jid,'slot_unavailable',{})
-    if job['cpu']>slot['cpu'] or expires>job['deadline']:
-        return record(db,'lease',jid,'capacity_or_deadline',{})
+    if job['cpu']>slot['cpu'] or job['memory']>slot['memory'] or expires>job['deadline']:
+        return record(db,'lease',jid,'capacity_or_deadline',{'requested':{'cpu':job['cpu'],'memory':job['memory']},'available':{'cpu':slot['cpu'],'memory':slot['memory']}})
     active=rows(db,'SELECT * FROM leases WHERE slot=? AND status=?',(slot_id,'active'))
     if active and not preempt:return record(db,'lease',jid,'occupied',{'by':[a['job'] for a in active]})
     for a in active:
@@ -37,7 +37,7 @@ def repay(db,jid,slot_id,at):
     job=row(db,'SELECT * FROM jobs WHERE id=?',(jid,))
     if not lease or lease['status']!='preempted' or not lease['debt']:
         return record(db,'repay',jid,'no_debt',{})
-    if not slot or not slot['healthy'] or slot['cpu']<job['cpu'] or at+lease['debt']>job['deadline']:
+    if not slot or not slot['healthy'] or slot['cpu']<job['cpu'] or slot['memory']<job['memory'] or at+lease['debt']>job['deadline']:
         return record(db,'repay',jid,'unrepayable',{'debt':lease['debt']})
     occupied=row(db,'SELECT job FROM leases WHERE slot=? AND status=?',(slot_id,'active'))
     if occupied:return record(db,'repay',jid,'occupied',{'by':occupied['job']})

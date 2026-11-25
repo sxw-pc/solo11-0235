@@ -38,6 +38,14 @@ class BusinessTests(unittest.TestCase):
         self.run_action('slot.register',id='spare',node='n2',cpu=4,at=3)
         self.assertEqual(self.run_action('slot.repay',id='j',slot='spare',at=4),'repaid')
         self.assertEqual(self.run_action('run.start',id='j',generation=2,at=5),'running')
+    def test_resource_vector_and_descendant_deadlines(self):
+        self.job(memory=8);self.slot()
+        self.assertEqual(self.lease(),'capacity_or_deadline')
+        self.run_action('slot.register',id='large',node='n2',cpu=4,memory=16,at=2)
+        self.assertEqual(self.run_action('slot.lease',id='j',slot='large',at=3,expires=50),'leased')
+        self.job('child',deadline=200,parents=['j'])
+        self.job('grandchild',deadline=150,parents=['child'])
+        self.assertEqual(self.run_action('job.revise',id='j',deadline=170,expected=1),'blocked_successors')
     def test_attempt_delivery_and_retention(self):
         self.job();self.slot();self.lease()
         self.assertEqual(self.run_action('run.start',id='j',generation=1,at=3),'running')
@@ -59,10 +67,11 @@ class BusinessTests(unittest.TestCase):
         with store.transaction(self.db) as db:
             self.assertEqual(store.row(db,'SELECT status FROM attempts WHERE job=?',('j',))['status'],'running')
     def test_cancel_blocks_successors_and_releases_slot(self):
-        self.job();self.job('child',parents=['j']);self.slot();self.lease()
+        self.job();self.job('child',parents=['j']);self.job('grandchild',parents=['child']);self.slot();self.lease()
         self.assertEqual(self.run_action('job.cancel',id='j',at=3,reason='operator'),'cancelled')
         with store.transaction(self.db) as db:
             self.assertEqual(store.row(db,'SELECT status FROM jobs WHERE id=?',('child',))['status'],'blocked_parent')
+            self.assertEqual(store.row(db,'SELECT status FROM jobs WHERE id=?',('grandchild',))['status'],'blocked_parent')
             self.assertEqual(store.row(db,'SELECT status FROM leases WHERE job=?',('j',))['status'],'released')
     def test_parent_artifact_changes_child_delivery_decision(self):
         digest='sha256:'+hashlib.sha256(b'payload').hexdigest()
