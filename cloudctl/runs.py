@@ -1,5 +1,15 @@
 import hashlib
 from .store import row,rows,record
+from . import secret_rotation as sr
+
+
+def _secret_delivery_gate(db,jid,at,pending_generation=None):
+    """None when delivery is allowed, otherwise the ineligibility verdict."""
+    if not row(db,"SELECT 1 FROM secret_envelope_versions WHERE job=?",(jid,)):
+        return None
+    verdict=sr.assess_delivery(db,jid,at,pending_generation=pending_generation)
+    return None if verdict['eligible'] else verdict
+
 
 def start(db,jid,generation,at):
     job=row(db,'SELECT * FROM jobs WHERE id=?',(jid,)); lease=row(db,'SELECT * FROM leases WHERE job=?',(jid,))
@@ -8,6 +18,10 @@ def start(db,jid,generation,at):
     if at>lease['expires']:
         db.execute('UPDATE leases SET status=? WHERE job=?',('expired',jid))
         return record(db,'start',jid,'lease_expired',{'expires':lease['expires'],'at':at})
+    allowed,reason=sr.mount_for_attempt(db,jid,generation,at)
+    if not allowed:
+        return record(db,'start',jid,'secret_mount_required' if reason=='secret_mount_required' else 'secret_version_revoked',
+                      {'generation':generation,'reason':reason})
     slot=row(db,'SELECT * FROM slots WHERE id=?',(lease['slot'],))
     if not slot or not slot['healthy'] or at-slot['heartbeat']>60:
         db.execute('UPDATE leases SET status=? WHERE job=?',('isolated',jid))
@@ -21,8 +35,13 @@ def settle(db,jid,generation,at,digest,success=True,content=None):
     job=row(db,'SELECT * FROM jobs WHERE id=?',(jid,)); attempt=row(db,'SELECT * FROM attempts WHERE job=? AND generation=?',(jid,generation))
     lease=row(db,'SELECT * FROM leases WHERE job=?',(jid,))
     if not attempt or not lease or lease['generation']!=generation or lease['status']!='active':
+        if attempt and attempt['status']=='quarantined':
+            return record(db,'settle',jid,'quarantined_attempt_rejected',{'generation':generation})
         return record(db,'settle',jid,'stale_attempt',{'generation':generation})
-    if attempt['status']!='running':return record(db,'settle',jid,'idempotent',{})
+    if attempt['status']!='running':
+        if attempt['status']=='quarantined':
+            return record(db,'settle',jid,'quarantined_attempt_rejected',{'generation':generation})
+        return record(db,'settle',jid,'idempotent',{})
     if at>lease['expires']:
         db.execute('UPDATE attempts SET status=?,ended=? WHERE job=? AND generation=?',('expired',at,jid,generation))
         db.execute('UPDATE leases SET status=? WHERE job=?',('expired',jid))
@@ -38,13 +57,26 @@ def settle(db,jid,generation,at,digest,success=True,content=None):
     if not success:
         decision='retryable' if at+job['duration']<job['deadline'] else 'breached'
         db.execute('UPDATE leases SET status=? WHERE job=?',('failed',jid))
+        # A failed attempt's secret mount is closed; retry requires a fresh mount.
+        if row(db,"SELECT 1 FROM sqlite_master WHERE type='table' AND name='secret_mounts'"):
+            db.execute("UPDATE secret_mounts SET status='expired' WHERE job=? AND status='active'",(jid,))
         if decision=='breached':db.execute('UPDATE jobs SET status=? WHERE id=?',('breached',jid))
         return record(db,'settle',jid,decision,{'at':at,'deadline':job['deadline']})
     parents=rows(db,'SELECT parent FROM dependencies WHERE job=?',(jid,))
     unmet=[p['parent'] for p in parents if not row(db,'SELECT job FROM artifacts WHERE job=? AND status=?',(p['parent'],'delivered'))]
     if unmet or at>job['deadline'] or not digest:
         return record(db,'settle',jid,'delivery_blocked',{'unmet':unmet,'late':at>job['deadline']})
+    blocked=_secret_delivery_gate(db,jid,at,pending_generation=generation)
+    if blocked is not None:
+        # Keep the tainted output as evidence, but never mark it deliverable.
+        db.execute('INSERT OR REPLACE INTO artifacts VALUES(?,?,?,?)',(jid,digest,at,'quarantined'))
+        db.execute("UPDATE attempts SET status='success',ended=?,digest=? WHERE job=? AND generation=?",
+                   (at,digest,jid,generation))
+        return record(db,'settle',jid,'secret_delivery_blocked',
+                      {'tainted_versions':blocked['tainted_versions'],'generation':generation,
+                       'artifact_status':'quarantined'})
     db.execute('INSERT OR REPLACE INTO artifacts VALUES(?,?,?,?)',(jid,digest,at,'delivered'))
+    sr.confirm_clean_recomputation(db,jid,generation,at,digest)
     db.execute('UPDATE jobs SET status=? WHERE id=?',('delivered',jid))
     db.execute('UPDATE leases SET status=? WHERE job=?',('released',jid))
     return record(db,'settle',jid,'delivered',{'digest':digest,'at':at})
@@ -73,7 +105,12 @@ def finalize(db,jid,generation,at):
     if attempt['ended']>job['deadline']:
         db.execute('UPDATE jobs SET status=? WHERE id=?',('breached',jid))
         return record(db,'finalize',jid,'breached',{'finished':attempt['ended']})
+    blocked=_secret_delivery_gate(db,jid,at,pending_generation=generation)
+    if blocked is not None:
+        return record(db,'finalize',jid,'secret_delivery_blocked',
+                      {'tainted_versions':blocked['tainted_versions'],'generation':generation})
     db.execute('INSERT OR REPLACE INTO artifacts VALUES(?,?,?,?)',(jid,attempt['digest'],at,'delivered'))
+    sr.confirm_clean_recomputation(db,jid,generation,at,attempt['digest'])
     db.execute('UPDATE jobs SET status=? WHERE id=?',('delivered',jid))
     db.execute('UPDATE leases SET status=? WHERE job=?',('released',jid))
     return record(db,'finalize',jid,'delivered',{'digest':attempt['digest'],'parent_count':len(parents)})

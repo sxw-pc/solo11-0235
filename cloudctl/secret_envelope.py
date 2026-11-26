@@ -1,22 +1,28 @@
-"""Register a tenant sealed envelope and issue its current job mount."""
-from .store import row, record
+"""Compatibility wrappers for the original one-shot envelope API.
+
+The real logic lives in :mod:`cloudctl.secret_rotation`, which keeps the
+versioned envelopes, evidence-gated short-lived mounts and delivery
+eligibility.  These wrappers preserve the historic call shapes while routing
+through the same gates, so legacy callers cannot bypass rotation controls.
+"""
+from . import secret_rotation as sr
+from .store import record, row
 
 
 def register(db, job, key_id, version, sealed_digest):
-    if not row(db, 'SELECT id FROM jobs WHERE id=?', (job,)):
-        return record(db, 'secret', job, 'missing_job', {})
-    db.execute('CREATE TABLE IF NOT EXISTS secret_envelopes (job TEXT PRIMARY KEY, key_id TEXT NOT NULL, version INTEGER NOT NULL, sealed_digest TEXT NOT NULL)')
-    old = row(db, 'SELECT * FROM secret_envelopes WHERE job=?', (job,))
-    if old:
-        return record(db, 'secret', job, 'idempotent' if old['key_id']==key_id and old['version']==version and old['sealed_digest']==sealed_digest else 'conflict', {})
-    db.execute('INSERT INTO secret_envelopes VALUES (?,?,?,?)', (job, key_id, version, sealed_digest))
-    return record(db, 'secret', job, 'registered', {'key_id':key_id,'version':version})
+    sr._ensure_tables(db)
+    result = sr.register_envelope(db, job, key_id, version, sealed_digest, 0)
+    # Keep the legacy one-row table for any remaining direct readers.
+    if result['decision'] in ('registered', 'idempotent'):
+        db.execute('CREATE TABLE IF NOT EXISTS secret_envelopes (job TEXT PRIMARY KEY, key_id TEXT NOT NULL,'
+                   ' version INTEGER NOT NULL, sealed_digest TEXT NOT NULL)')
+        db.execute('INSERT OR REPLACE INTO secret_envelopes VALUES(?,?,?,?)',
+                   (job, key_id, version, sealed_digest))
+    return result
 
 
 def mount(db, job, generation, at):
-    db.execute('CREATE TABLE IF NOT EXISTS secret_envelopes (job TEXT PRIMARY KEY, key_id TEXT NOT NULL, version INTEGER NOT NULL, sealed_digest TEXT NOT NULL)')
-    envelope = row(db, 'SELECT * FROM secret_envelopes WHERE job=?', (job,))
-    lease = row(db, 'SELECT * FROM leases WHERE job=?', (job,))
-    if not envelope or not lease or lease['status']!='active' or lease['generation']!=generation or at>lease['expires']:
-        return record(db, 'secret_mount', job, 'unavailable', {'generation':generation})
-    return record(db, 'secret_mount', job, 'issued', {'key_id':envelope['key_id'],'version':envelope['version'],'sealed_digest':envelope['sealed_digest'],'generation':generation})
+    sr._ensure_tables(db)
+    if not row(db, "SELECT 1 FROM secret_envelope_versions WHERE job=?", (job,)):
+        return record(db, 'secret_mount', job, 'unavailable', {'generation': generation})
+    return sr.issue_mount(db, job, generation, at)

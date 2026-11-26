@@ -1,4 +1,5 @@
 from .store import row,rows,record
+from . import secret_rotation as sr
 
 def submit(db,request):
     jid=request['id']; parents=sorted(set(request.get('parents',[])))
@@ -40,6 +41,7 @@ def cancel(db,jid,at,reason):
     db.execute('INSERT OR REPLACE INTO cancellations VALUES(?,?,?,?)',(jid,generation,reason,at))
     db.execute('UPDATE jobs SET status=?,version=version+1 WHERE id=?',('cancelled',jid))
     db.execute('UPDATE leases SET status=? WHERE job=? AND status=?',('released',jid,'active'))
+    sr.on_job_cancelled(db,jid,at)
     dependents=rows(db,'WITH RECURSIVE descendants(id) AS (SELECT job FROM dependencies WHERE parent=? UNION SELECT d.job FROM dependencies d JOIN descendants x ON d.parent=x.id) SELECT id FROM descendants',(jid,))
     for child in dependents:
         db.execute('UPDATE jobs SET status=? WHERE id=? AND status=?',('blocked_parent',child['id'],'accepted'))
