@@ -1,6 +1,16 @@
 import hashlib
 from .store import row,rows,record
 
+def _claim_hook(db,name,*args):
+    try:
+        from . import claims
+        fn=getattr(claims,name,None)
+        if fn is not None:return fn(db,*args)
+    except Exception:
+        # Claim bookkeeping must never turn a valid delivery/settlement into
+        # a failed run; claims can be reconciled via claims.sync afterwards.
+        return None
+
 def start(db,jid,generation,at):
     job=row(db,'SELECT * FROM jobs WHERE id=?',(jid,)); lease=row(db,'SELECT * FROM leases WHERE job=?',(jid,))
     if not job or job['status']!='accepted' or not lease or lease['status']!='active' or lease['generation']!=generation:
@@ -39,6 +49,7 @@ def settle(db,jid,generation,at,digest,success=True,content=None):
         decision='retryable' if at+job['duration']<job['deadline'] else 'breached'
         db.execute('UPDATE leases SET status=? WHERE job=?',('failed',jid))
         if decision=='breached':db.execute('UPDATE jobs SET status=? WHERE id=?',('breached',jid))
+        _claim_hook(db,'on_attempt_failed',jid,generation,at,decision)
         return record(db,'settle',jid,decision,{'at':at,'deadline':job['deadline']})
     parents=rows(db,'SELECT parent FROM dependencies WHERE job=?',(jid,))
     unmet=[p['parent'] for p in parents if not row(db,'SELECT job FROM artifacts WHERE job=? AND status=?',(p['parent'],'delivered'))]
@@ -47,6 +58,7 @@ def settle(db,jid,generation,at,digest,success=True,content=None):
     db.execute('INSERT OR REPLACE INTO artifacts VALUES(?,?,?,?)',(jid,digest,at,'delivered'))
     db.execute('UPDATE jobs SET status=? WHERE id=?',('delivered',jid))
     db.execute('UPDATE leases SET status=? WHERE job=?',('released',jid))
+    _claim_hook(db,'on_delivery',jid,generation,at,digest)
     return record(db,'settle',jid,'delivered',{'digest':digest,'at':at})
 
 def finalize(db,jid,generation,at):
@@ -76,6 +88,7 @@ def finalize(db,jid,generation,at):
     db.execute('INSERT OR REPLACE INTO artifacts VALUES(?,?,?,?)',(jid,attempt['digest'],at,'delivered'))
     db.execute('UPDATE jobs SET status=? WHERE id=?',('delivered',jid))
     db.execute('UPDATE leases SET status=? WHERE job=?',('released',jid))
+    _claim_hook(db,'on_delivery',jid,generation,at,attempt['digest'])
     return record(db,'finalize',jid,'delivered',{'digest':attempt['digest'],'parent_count':len(parents)})
 
 def retention(db,jid,expires,hold,reason):

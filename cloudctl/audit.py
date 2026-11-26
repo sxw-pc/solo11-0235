@@ -15,4 +15,10 @@ def inspect(db,jid):
     elif attempt and attempt['status']=='failed':decision='retry_needed'
     elif lease and lease['status']=='active':decision='running_or_reserved'
     else:decision='awaiting_slot'
-    return record(db,'audit',jid,decision,{'job_version':job['version'],'parents_unmet':unmet,'lease_generation':lease['generation'] if lease else None,'attempt_generation':attempt['generation'] if attempt else None,'stored_status':job['status']})
+    claim_summary=None
+    if row(db,"SELECT 1 FROM sqlite_master WHERE type='table' AND name='claims'"):
+        claim_row=row(db,'SELECT id,status,liability,remedy_kind FROM claims WHERE job=? ORDER BY created_at DESC LIMIT 1',(jid,))
+        if claim_row:claim_summary={'id':claim_row['id'],'status':claim_row['status'],'liability':claim_row['liability'],'remedy':claim_row['remedy_kind']}
+    result=record(db,'audit',jid,decision,{'job_version':job['version'],'parents_unmet':unmet,'lease_generation':lease['generation'] if lease else None,'attempt_generation':attempt['generation'] if attempt else None,'stored_status':job['status'],'claim':claim_summary})
+    result['claim']=claim_summary
+    return result
