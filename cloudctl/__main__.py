@@ -1,30 +1,36 @@
 import argparse
 import json
 import sys
-from . import jobs,slots,runs,store,audit
+from . import audit, jobs, lineage, runs, slots, store
 
-OPERATIONS={
-    'job.submit':jobs.submit,
-    'job.revise':lambda db,r:jobs.revise(db,r['id'],r['deadline'],r['expected']),
-    'job.cancel':lambda db,r:jobs.cancel(db,r['id'],r['at'],r['reason']),
-    'slot.register':slots.register,
-    'slot.lease':lambda db,r:slots.lease(db,r['id'],r['slot'],r['at'],r['expires'],r.get('preempt',False)),
-    'slot.heartbeat':lambda db,r:slots.heartbeat(db,r['slot'],r['at'],r['healthy']),
-    'slot.repay':lambda db,r:slots.repay(db,r['id'],r['slot'],r['at']),
-    'run.start':lambda db,r:runs.start(db,r['id'],r['generation'],r['at']),
-    'run.settle':lambda db,r:runs.settle(db,r['id'],r['generation'],r['at'],r.get('digest'),r.get('success',True),r.get('content')),
-    'run.finalize':lambda db,r:runs.finalize(db,r['id'],r['generation'],r['at']),
-    'run.retention':lambda db,r:runs.retention(db,r['id'],r['expires'],r['hold'],r.get('reason','')),
-    'run.purge':lambda db,r:runs.purge(db,r['at']),
-    'job.audit':lambda db,r:audit.inspect(db,r['id']),
+OPERATIONS = {
+    'job.submit': jobs.submit,
+    'job.revise': lambda db, r: jobs.revise(db, r['id'], r['deadline'], r['expected']),
+    'job.cancel': lambda db, r: jobs.cancel(db, r['id'], r['at'], r['reason']),
+    'job.audit': lambda db, r: audit.inspect(db, r['id']),
+    'job.verify_lineage': lambda db, r: runs.verify_lineage(db, r['id']),
+    'slot.register': slots.register,
+    'slot.lease': lambda db, r: slots.lease(db, r['id'], r['slot'], r['at'], r['expires'], r.get('preempt', False)),
+    'slot.heartbeat': lambda db, r: slots.heartbeat(db, r['slot'], r['at'], r['healthy']),
+    'slot.repay': lambda db, r: slots.repay(db, r['id'], r['slot'], r['at']),
+    'run.start': lambda db, r: runs.start(db, r['id'], r['generation'], r['at']),
+    'run.settle': lambda db, r: runs.settle(db, r['id'], r['generation'], r['at'], r.get('digest'), r.get('success', True), r.get('content')),
+    'run.finalize': lambda db, r: runs.finalize(db, r['id'], r['generation'], r['at']),
+    'run.retention': lambda db, r: runs.retention(db, r['id'], r['expires'], r['hold'], r.get('reason', ''), r.get('at')),
+    'run.purge': lambda db, r: runs.purge(db, r['at']),
+    'run.seal': lambda db, r: lineage.seal(db, r['id'], r['at']),
 }
 
-def execute(db_path,request):
+def execute(db_path, request):
     with store.transaction(db_path) as db:
-        action=request['action']
-        if action not in OPERATIONS:raise ValueError(f'unknown action: {action}')
-        result=OPERATIONS[action](db,request)
-        if 'id' in request:result['events']=store.report(db,request['id'])
+        action = request['action']
+        if action not in OPERATIONS:
+            raise ValueError(f'unknown action: {action}')
+        result = OPERATIONS[action](db, request)
+        if 'id' in request:
+            result['events'] = store.report(db, request['id'])
+        if request.get('verify_decisions'):
+            result['decision_log'] = store.verify_decisions(db)
         return result
 
 def main():
