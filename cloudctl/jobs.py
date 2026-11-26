@@ -1,4 +1,43 @@
 from .store import row,rows,record
+from .planner import feasible
+
+def _release_child_leases(db, at):
+    """Drop fixed reservations that no longer fit the changed parent plan."""
+    deps = {(d['job'], d['parent']) for d in rows(db, 'SELECT job,parent FROM dependencies')}
+    parents_of = {}
+    for child, parent in deps:
+        parents_of.setdefault(child, []).append(parent)
+
+    def depth(jid):
+        stack, best, seen = [(jid, 0)], 0, set()
+        while stack:
+            cur, d = stack.pop()
+            if cur in seen:
+                continue
+            seen.add(cur)
+            best = max(best, d)
+            stack.extend((p, d + 1) for p in parents_of.get(cur, ()))
+        return best
+
+    released = []
+    while True:
+        ok, _, _ = feasible(db, at)
+        if ok:
+            break
+        candidates = rows(db, "SELECT job,slot FROM leases WHERE status IN ('active','isolated') "
+                              "AND job IN (SELECT job FROM dependencies)")
+        if not candidates:
+            break
+        # Release the deepest descendant first, preserving the longest chain.
+        item = max(candidates, key=lambda c: depth(c['job']))
+        db.execute('UPDATE leases SET status=? WHERE job=?', ('released', item['job']))
+        db.execute('UPDATE attempts SET status=?,ended=? WHERE job=? AND status=?',
+                   ('preempted', at, item['job'], 'running'))
+        record(db, 'release', item['job'], 'released',
+               {'slot': item['slot'], 'reason': 'parent_revised'})
+        released.append(item['job'])
+    return released
+
 
 def submit(db,request):
     jid=request['id']; parents=sorted(set(request.get('parents',[])))
@@ -16,7 +55,7 @@ def submit(db,request):
     db.executemany('INSERT INTO dependencies VALUES(?,?)',[(jid,p) for p in parents])
     return record(db,'submit',jid,'accepted',{'parents':parents,'version':1})
 
-def revise(db,jid,deadline,expected):
+def revise(db,jid,deadline,expected,at=None):
     job=row(db,'SELECT * FROM jobs WHERE id=?',(jid,))
     if not job:return record(db,'revise',jid,'missing',{})
     if job['status']!='accepted':return record(db,'revise',jid,'not_revisable',{'status':job['status']})
@@ -29,7 +68,12 @@ def revise(db,jid,deadline,expected):
     blocked=[c['id'] for c in children if c['deadline']<deadline]
     if blocked:return record(db,'revise',jid,'blocked_successors',{'jobs':blocked})
     db.execute('UPDATE jobs SET deadline=?,version=version+1 WHERE id=?',(deadline,jid))
-    return record(db,'revise',jid,'revised',{'version':expected+1,'successors':[c['id'] for c in children]})
+    # A moved parent deadline changes whether child leases are still worth
+    # keeping: re-check the whole timeline and surrender the deepest child
+    # reservations until the remaining promises are deliverable.
+    moment = job['created'] if at is None else at
+    released=_release_child_leases(db,moment)
+    return record(db,'revise',jid,'revised',{'version':expected+1,'successors':[c['id'] for c in children],'released_leases':released})
 
 def cancel(db,jid,at,reason):
     job=row(db,'SELECT * FROM jobs WHERE id=?',(jid,))
@@ -39,9 +83,15 @@ def cancel(db,jid,at,reason):
     generation=(row(db,'SELECT generation FROM cancellations WHERE job=?',(jid,)) or {}).get('generation',0)+1
     db.execute('INSERT OR REPLACE INTO cancellations VALUES(?,?,?,?)',(jid,generation,reason,at))
     db.execute('UPDATE jobs SET status=?,version=version+1 WHERE id=?',('cancelled',jid))
-    db.execute('UPDATE leases SET status=? WHERE job=? AND status=?',('released',jid,'active'))
+    own=row(db,'SELECT * FROM leases WHERE job=? AND status=?',(jid,'active'))
+    if own:
+        db.execute('UPDATE leases SET status=? WHERE job=? AND status=?',('released',jid,'active'))
+        record(db,'release',jid,'released',{'slot':own['slot'],'reason':'parent_cancelled'})
     dependents=rows(db,'WITH RECURSIVE descendants(id) AS (SELECT job FROM dependencies WHERE parent=? UNION SELECT d.job FROM dependencies d JOIN descendants x ON d.parent=x.id) SELECT id FROM descendants',(jid,))
     for child in dependents:
         db.execute('UPDATE jobs SET status=? WHERE id=? AND status=?',('blocked_parent',child['id'],'accepted'))
-        db.execute('UPDATE leases SET status=? WHERE job=? AND status=?',('released',child['id'],'active'))
+        child_lease=row(db,'SELECT * FROM leases WHERE job=? AND status=?',(child['id'],'active'))
+        if child_lease:
+            db.execute('UPDATE leases SET status=? WHERE job=? AND status=?',('released',child['id'],'active'))
+            record(db,'release',child['id'],'released',{'slot':child_lease['slot'],'reason':'parent_cancelled'})
     return record(db,'cancel',jid,'cancelled',{'generation':generation,'blocked':[x['id'] for x in dependents]})

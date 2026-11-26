@@ -21,6 +21,8 @@ def settle(db,jid,generation,at,digest,success=True,content=None):
     job=row(db,'SELECT * FROM jobs WHERE id=?',(jid,)); attempt=row(db,'SELECT * FROM attempts WHERE job=? AND generation=?',(jid,generation))
     lease=row(db,'SELECT * FROM leases WHERE job=?',(jid,))
     if not attempt or not lease or lease['generation']!=generation or lease['status']!='active':
+        # A late success from an old generation can never take delivery away
+        # from the current one; the attempt row itself is kept as history.
         return record(db,'settle',jid,'stale_attempt',{'generation':generation})
     if attempt['status']!='running':return record(db,'settle',jid,'idempotent',{})
     if at>lease['expires']:
