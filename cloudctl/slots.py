@@ -1,4 +1,5 @@
 from .store import row,rows,record
+from . import licenses
 
 def register(db,request):
     if min(request['cpu'],request.get('memory',4))<=0:
@@ -22,6 +23,9 @@ def lease(db,jid,slot_id,now,expires,preempt=False):
         if row(db,'SELECT status FROM artifacts WHERE job=?',(a['job'],)):
             return record(db,'lease',jid,'delivered_cannot_preempt',{})
         db.execute('UPDATE leases SET status=?,debt=? WHERE job=?',('preempted',max(0,a['expires']-now),a['job']))
+        # A preempted execution loses its software seat too; the next
+        # generation must borrow a fresh token.
+        licenses.release_for_job(db,a['job'],now)
     generation=(row(db,'SELECT generation FROM leases WHERE job=?',(jid,)) or {}).get('generation',0)+1
     db.execute('INSERT OR REPLACE INTO leases VALUES(?,?,?,?,?,?)',(jid,slot_id,generation,expires,'active',0))
     return record(db,'lease',jid,'leased',{'slot':slot_id,'generation':generation,'preempted':[a['job'] for a in active]})

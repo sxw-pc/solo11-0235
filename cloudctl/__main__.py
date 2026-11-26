@@ -1,7 +1,7 @@
 import argparse
 import json
 import sys
-from . import jobs,slots,runs,store,audit
+from . import jobs,slots,runs,store,audit,licenses
 
 OPERATIONS={
     'job.submit':jobs.submit,
@@ -17,6 +17,18 @@ OPERATIONS={
     'run.retention':lambda db,r:runs.retention(db,r['id'],r['expires'],r['hold'],r.get('reason','')),
     'run.purge':lambda db,r:runs.purge(db,r['at']),
     'job.audit':lambda db,r:audit.inspect(db,r['id']),
+    'license.entitlement':licenses.register_entitlement,
+    'license.entitlement.cancel':lambda db,r:licenses.cancel_entitlement(db,r['id'],r['at'],r.get('reason','')),
+    'license.borrow':licenses.borrow,
+    'license.emergency':licenses.emergency_borrow,
+    'license.reauthorize':licenses.reauthorize,
+    'license.checkin':licenses.checkin,
+    'license.reconcile':licenses.reconcile_return,
+    'license.timeout':licenses.timeout_return,
+    'license.receipt':licenses.receive_receipt,
+    'license.correction':licenses.vendor_correction,
+    'license.writeoff':licenses.write_off,
+    'license.audit':lambda db,r:licenses.compliance_report(db,r['id']),
 }
 
 def execute(db_path,request):
@@ -29,7 +41,7 @@ def execute(db_path,request):
 
 def main():
     parser=argparse.ArgumentParser()
-    parser.add_argument('command',choices=['init','demo','job','slot','run'])
+    parser.add_argument('command',choices=['init','demo','job','slot','run','license'])
     parser.add_argument('operation',nargs='?')
     parser.add_argument('--db',default='state.sqlite')
     parser.add_argument('--fixture')

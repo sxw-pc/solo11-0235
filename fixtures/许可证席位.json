@@ -1,0 +1,10 @@
+[
+  {"action":"job.submit","id":"solver-job","tenant":"acme","deadline":100,"duration":10,"cpu":2,"created":0,"license":{"product":"solver","version":"9.2","region":"cn-north"}},
+  {"action":"slot.register","id":"slot-a","node":"node-a","cpu":4,"at":1},
+  {"action":"slot.lease","id":"solver-job","slot":"slot-a","at":2,"expires":50},
+  {"action":"license.entitlement","id":"byol-c","product":"solver","version":"9.2","region":"cn-north","tenant":"acme","kind":"byol","seats":2,"borrowed_from":0,"borrowed_until":200},
+  {"action":"license.borrow","id":"solver-job","generation":1,"at":3,"until":50},
+  {"action":"run.start","id":"solver-job","generation":1,"at":4},
+  {"action":"run.settle","id":"solver-job","generation":1,"at":20,"digest":"sha256:239f59ed55e737c77147cf55ad0c1b030b6d7ee748a7426952f9b852d5a935e5","content":"payload"},
+  {"action":"license.audit","id":"solver-job"}
+]

@@ -1,4 +1,5 @@
 from .store import row,rows,record
+from . import licenses
 
 def submit(db,request):
     jid=request['id']; parents=sorted(set(request.get('parents',[])))
@@ -14,7 +15,13 @@ def submit(db,request):
         return record(db,'submit',jid,'rejected_deadline',{'deadline':request['deadline']})
     db.execute('INSERT INTO jobs VALUES(?,?,?,?,?,?,?,?,?)',(jid,request['tenant'],request['deadline'],request['duration'],request['cpu'],request.get('memory',1),'accepted',1,request['created']))
     db.executemany('INSERT INTO dependencies VALUES(?,?)',[(jid,p) for p in parents])
-    return record(db,'submit',jid,'accepted',{'parents':parents,'version':1})
+    license_need=request.get('license')
+    if license_need:
+        # Every job carries its own software-seat requirement. A parent's
+        # grant never authorises a child run.
+        db.execute('INSERT INTO job_license VALUES(?,?,?,?)',
+                   (jid,license_need['product'],str(license_need['version']),license_need['region']))
+    return record(db,'submit',jid,'accepted',{'parents':parents,'version':1,'license':license_need})
 
 def revise(db,jid,deadline,expected):
     job=row(db,'SELECT * FROM jobs WHERE id=?',(jid,))
@@ -40,8 +47,10 @@ def cancel(db,jid,at,reason):
     db.execute('INSERT OR REPLACE INTO cancellations VALUES(?,?,?,?)',(jid,generation,reason,at))
     db.execute('UPDATE jobs SET status=?,version=version+1 WHERE id=?',('cancelled',jid))
     db.execute('UPDATE leases SET status=? WHERE job=? AND status=?',('released',jid,'active'))
+    licenses.release_for_job(db,jid,at)
     dependents=rows(db,'WITH RECURSIVE descendants(id) AS (SELECT job FROM dependencies WHERE parent=? UNION SELECT d.job FROM dependencies d JOIN descendants x ON d.parent=x.id) SELECT id FROM descendants',(jid,))
     for child in dependents:
         db.execute('UPDATE jobs SET status=? WHERE id=? AND status=?',('blocked_parent',child['id'],'accepted'))
         db.execute('UPDATE leases SET status=? WHERE job=? AND status=?',('released',child['id'],'active'))
+        licenses.release_for_job(db,child['id'],at)
     return record(db,'cancel',jid,'cancelled',{'generation':generation,'blocked':[x['id'] for x in dependents]})
