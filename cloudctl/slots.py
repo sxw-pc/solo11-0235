@@ -1,4 +1,5 @@
 from .store import row,rows,record
+from . import residency
 
 def register(db,request):
     if min(request['cpu'],request.get('memory',4))<=0:
@@ -6,6 +7,8 @@ def register(db,request):
     old=row(db,'SELECT * FROM slots WHERE id=?',(request['id'],))
     if old and (old['cpu']!=request['cpu'] or old['memory']!=request.get('memory',4)):return record(db,'slot',request['id'],'conflict',{})
     db.execute('INSERT OR REPLACE INTO slots VALUES(?,?,?,?,?,?)',(request['id'],request['cpu'],request.get('memory',4),request['node'],1,request['at']))
+    if 'jurisdiction' in request:
+        residency.register_node(db,{'node':request['node'],'jurisdiction':request['jurisdiction'],'controlled':request.get('controlled',False),'categories':request.get('categories',[])})
     return record(db,'slot',request['id'],'ready',{'cpu':request['cpu'],'memory':request.get('memory',4)})
 
 def lease(db,jid,slot_id,now,expires,preempt=False):
@@ -17,6 +20,8 @@ def lease(db,jid,slot_id,now,expires,preempt=False):
     if job['cpu']>slot['cpu'] or job['memory']>slot['memory'] or expires>job['deadline']:
         return record(db,'lease',jid,'capacity_or_deadline',{'requested':{'cpu':job['cpu'],'memory':job['memory']},'available':{'cpu':slot['cpu'],'memory':slot['memory']}})
     active=rows(db,'SELECT * FROM leases WHERE slot=? AND status=?',(slot_id,'active'))
+    ok,decision,evidence=residency.lease_gate(db,jid,slot['node'])
+    if not ok:return record(db,'lease',jid,decision,evidence)
     if active and not preempt:return record(db,'lease',jid,'occupied',{'by':[a['job'] for a in active]})
     for a in active:
         if row(db,'SELECT status FROM artifacts WHERE job=?',(a['job'],)):
@@ -44,6 +49,8 @@ def repay(db,jid,slot_id,at):
         return record(db,'repay',jid,'unrepayable',{'debt':lease['debt']})
     occupied=row(db,'SELECT job FROM leases WHERE slot=? AND status=?',(slot_id,'active'))
     if occupied:return record(db,'repay',jid,'occupied',{'by':occupied['job']})
+    ok,decision,evidence=residency.lease_gate(db,jid,slot['node'])
+    if not ok:return record(db,'repay',jid,decision,evidence)
     generation=lease['generation']+1
     db.execute('UPDATE leases SET slot=?,generation=?,expires=?,status=?,debt=0 WHERE job=?',(slot_id,generation,at+lease['debt'],'active',jid))
     return record(db,'repay',jid,'repaid',{'slot':slot_id,'generation':generation})

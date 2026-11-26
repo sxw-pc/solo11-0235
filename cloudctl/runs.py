@@ -1,10 +1,13 @@
 import hashlib
 from .store import row,rows,record
+from . import residency
 
 def start(db,jid,generation,at):
     job=row(db,'SELECT * FROM jobs WHERE id=?',(jid,)); lease=row(db,'SELECT * FROM leases WHERE job=?',(jid,))
     if not job or job['status']!='accepted' or not lease or lease['status']!='active' or lease['generation']!=generation:
         return record(db,'start',jid,'not_leased',{'generation':generation})
+    ok,decision,evidence=residency.start_gate(db,jid,generation)
+    if not ok:return record(db,'start',jid,decision,evidence)
     if at>lease['expires']:
         db.execute('UPDATE leases SET status=? WHERE job=?',('expired',jid))
         return record(db,'start',jid,'lease_expired',{'expires':lease['expires'],'at':at})
@@ -20,6 +23,12 @@ def start(db,jid,generation,at):
 def settle(db,jid,generation,at,digest,success=True,content=None):
     job=row(db,'SELECT * FROM jobs WHERE id=?',(jid,)); attempt=row(db,'SELECT * FROM attempts WHERE job=? AND generation=?',(jid,generation))
     lease=row(db,'SELECT * FROM leases WHERE job=?',(jid,))
+    _link,manifest=residency.job_manifest(db,jid)
+    if manifest is not None and success:
+        # residency basis first: a swapped manifest or old-generation receipt
+        # must surface as a licensing decision, not a generic stale attempt
+        ok,decision,evidence=residency.delivery_gate(db,jid,generation)
+        if not ok:return record(db,'settle',jid,decision,evidence)
     if not attempt or not lease or lease['generation']!=generation or lease['status']!='active':
         return record(db,'settle',jid,'stale_attempt',{'generation':generation})
     if attempt['status']!='running':return record(db,'settle',jid,'idempotent',{})
@@ -44,10 +53,13 @@ def settle(db,jid,generation,at,digest,success=True,content=None):
     unmet=[p['parent'] for p in parents if not row(db,'SELECT job FROM artifacts WHERE job=? AND status=?',(p['parent'],'delivered'))]
     if unmet or at>job['deadline'] or not digest:
         return record(db,'settle',jid,'delivery_blocked',{'unmet':unmet,'late':at>job['deadline']})
+    ok,decision,evidence=residency.delivery_gate(db,jid,generation)
+    if not ok:return record(db,'settle',jid,decision,evidence)
     db.execute('INSERT OR REPLACE INTO artifacts VALUES(?,?,?,?)',(jid,digest,at,'delivered'))
+    receipt=residency.delivery_receipt(db,jid,generation,digest,at)
     db.execute('UPDATE jobs SET status=? WHERE id=?',('delivered',jid))
     db.execute('UPDATE leases SET status=? WHERE job=?',('released',jid))
-    return record(db,'settle',jid,'delivered',{'digest':digest,'at':at})
+    return record(db,'settle',jid,'delivered',{'digest':digest,'at':at,'residency':receipt})
 
 def finalize(db,jid,generation,at):
     job=row(db,'SELECT * FROM jobs WHERE id=?',(jid,))
@@ -73,10 +85,13 @@ def finalize(db,jid,generation,at):
     if attempt['ended']>job['deadline']:
         db.execute('UPDATE jobs SET status=? WHERE id=?',('breached',jid))
         return record(db,'finalize',jid,'breached',{'finished':attempt['ended']})
+    ok,decision,evidence=residency.delivery_gate(db,jid,generation)
+    if not ok:return record(db,'finalize',jid,decision,evidence)
     db.execute('INSERT OR REPLACE INTO artifacts VALUES(?,?,?,?)',(jid,attempt['digest'],at,'delivered'))
+    receipt=residency.delivery_receipt(db,jid,generation,attempt['digest'],at)
     db.execute('UPDATE jobs SET status=? WHERE id=?',('delivered',jid))
     db.execute('UPDATE leases SET status=? WHERE job=?',('released',jid))
-    return record(db,'finalize',jid,'delivered',{'digest':attempt['digest'],'parent_count':len(parents)})
+    return record(db,'finalize',jid,'delivered',{'digest':attempt['digest'],'parent_count':len(parents),'residency':receipt})
 
 def retention(db,jid,expires,hold,reason):
     artifact=row(db,'SELECT * FROM artifacts WHERE job=? AND status=?',(jid,'delivered'))

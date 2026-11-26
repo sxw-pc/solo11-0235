@@ -1,7 +1,7 @@
 import argparse
 import json
 import sys
-from . import jobs,slots,runs,store,audit
+from . import jobs,slots,runs,store,audit,residency
 
 OPERATIONS={
     'job.submit':jobs.submit,
@@ -17,6 +17,18 @@ OPERATIONS={
     'run.retention':lambda db,r:runs.retention(db,r['id'],r['expires'],r['hold'],r.get('reason','')),
     'run.purge':lambda db,r:runs.purge(db,r['at']),
     'job.audit':lambda db,r:audit.inspect(db,r['id']),
+    'residency.dataset':residency.register_dataset,
+    'residency.node':residency.register_node,
+    'residency.license':residency.issue_license,
+    'residency.sign':residency.sign_license,
+    'residency.revoke':residency.revoke_license,
+    'residency.manifest':residency.approve_manifest,
+    'residency.copy':residency.register_copy,
+    'residency.copy_delete':residency.delete_copy,
+    'residency.duty':residency.discharge_deletion_duty,
+    'residency.transform':residency.register_transform,
+    'residency.egress':residency.register_egress,
+    'residency.audit':lambda db,r:residency.audit(db,r['id']),
 }
 
 def execute(db_path,request):
@@ -29,7 +41,7 @@ def execute(db_path,request):
 
 def main():
     parser=argparse.ArgumentParser()
-    parser.add_argument('command',choices=['init','demo','job','slot','run'])
+    parser.add_argument('command',choices=['init','demo','job','slot','run','residency'])
     parser.add_argument('operation',nargs='?')
     parser.add_argument('--db',default='state.sqlite')
     parser.add_argument('--fixture')
@@ -43,7 +55,9 @@ def main():
         requests=json.load(open(args.fixture,encoding='utf-8'))
     if isinstance(requests,dict):requests=[requests]
     for request in requests:
-        if args.command not in ('demo',request['action'].split('.')[0]):
+        prefix=request['action'].split('.')[0]
+        # the residency orchestrator legitimately drives slot and run actions
+        if args.command!='demo' and args.command!='residency' and prefix!=args.command:
             raise ValueError('fixture action and command differ')
         for prerequisite in request.get('setup',[]):
             execute(args.db,prerequisite)

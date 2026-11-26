@@ -1,4 +1,5 @@
 from .store import row,rows,record
+from . import residency
 
 def inspect(db,jid):
     job=row(db,'SELECT * FROM jobs WHERE id=?',(jid,))
@@ -15,4 +16,12 @@ def inspect(db,jid):
     elif attempt and attempt['status']=='failed':decision='retry_needed'
     elif lease and lease['status']=='active':decision='running_or_reserved'
     else:decision='awaiting_slot'
-    return record(db,'audit',jid,decision,{'job_version':job['version'],'parents_unmet':unmet,'lease_generation':lease['generation'] if lease else None,'attempt_generation':attempt['generation'] if attempt else None,'stored_status':job['status']})
+    _link,manifest=residency.job_manifest(db,jid)
+    residency_evidence=None
+    if manifest:
+        violations=rows(db,'SELECT id,reason,location,jurisdiction FROM rviolations WHERE job=?',(jid,))
+        receipt=row(db,'SELECT manifest,digest,licenses FROM regress WHERE job=?',(jid,))
+        residency_evidence={'manifest':manifest['id'],'manifest_digest':manifest['digest'],
+                            'violations':violations,'delivery_receipt':dict(receipt) if receipt else None,
+                            'compliant':not violations}
+    return record(db,'audit',jid,decision,{'job_version':job['version'],'parents_unmet':unmet,'lease_generation':lease['generation'] if lease else None,'attempt_generation':attempt['generation'] if attempt else None,'stored_status':job['status'],'residency':residency_evidence})

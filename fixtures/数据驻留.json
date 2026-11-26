@@ -1,0 +1,17 @@
+[
+  {"action":"residency.dataset","id":"P","origin":"EU","category":"raw_personal","fields":["amount","customer_id","email"],"content":"raw-eu-customer-rows","at":1},
+  {"action":"residency.dataset","id":"Q","origin":"NA","category":"public_params","fields":["param_key","param_value"],"content":"na-public-parameters","at":2},
+  {"action":"residency.license","dataset":"P","version":"v1","at":3,"signers":["customer"],"signatures":{"customer":"sig:fd16757bc3ead8d644490621"},"scope":{"processing_locations":["EU"],"node_categories":["eu_standard"],"allowed_fields":["amount","customer_id","email"],"controlled_environment":false,"deletion_within_days":7,"required_signers":["customer"],"egress":[{"classification":"deid_stats","recipient_jurisdictions":["EU","NA"],"requires_verified_transform":true}]}},
+  {"action":"residency.license","dataset":"Q","version":"v1","at":4,"signers":["customer"],"signatures":{"customer":"sig:363e6a58b698bccad8464734"},"scope":{"processing_locations":["EU","NA"],"node_categories":["eu_standard","na_standard"],"allowed_fields":["param_key","param_value"],"controlled_environment":false,"deletion_within_days":30,"required_signers":["customer"],"egress":[]}},
+  {"action":"residency.node","node":"node-e","jurisdiction":"EU","controlled":false,"categories":["eu_standard"],"at":5},
+  {"action":"residency.node","node":"node-n","jurisdiction":"NA","controlled":false,"categories":["na_standard"],"at":6},
+  {"action":"slot.register","id":"E","node":"node-e","cpu":8,"at":7},
+  {"action":"slot.register","id":"N","node":"node-n","cpu":8,"at":8},
+  {"action":"job.submit","id":"J","tenant":"t","deadline":100000,"duration":20,"cpu":2,"created":0,"parents":[]},
+  {"action":"residency.manifest","id":"m1","job":"J","at":9,"entries":[{"dataset":"P","version":"v1"},{"dataset":"Q","version":"v1"}]},
+  {"action":"slot.lease","id":"J","slot":"N","at":10,"expires":99000},
+  {"action":"slot.lease","id":"J","slot":"E","at":11,"expires":99000},
+  {"action":"run.start","id":"J","generation":1,"at":12},
+  {"action":"residency.copy","job":"J","generation":1,"dataset":"P","location":"node-e","kind":"staging","fields":["amount","customer_id","email"],"at":13},
+  {"action":"residency.copy","job":"J","generation":1,"dataset":"P","location":"node-n","kind":"recovery","fields":["amount","customer_id","email"],"at":14}
+]
